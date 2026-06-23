@@ -1,0 +1,48 @@
+{
+  "name": "ernestdefoe/federation",
+  "description": "ActivityPub federation for Flarum 2 — make your community a discoverable, followable fediverse actor. People on Mastodon, Lemmy and other servers can follow @{community}@{host} (and individual members) and receive every new discussion in their timeline. Inbound replies and likes flow back in as posts and reactions. No core files touched.",
+  "keywords": ["flarum", "flarum-extension", "activitypub", "fediverse", "mastodon", "federation", "webfinger"],
+  "type": "flarum-extension",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "ernestdefoe",
+      "email": "ernestdefoe@gmail.com"
+    }
+  ],
+  "homepage": "https://github.com/ernestdefoe/federation",
+  "support": {
+    "issues": "https://github.com/ernestdefoe/federation/issues",
+    "source": "https://github.com/ernestdefoe/federation"
+  },
+  "require": {
+    "php": "^8.3",
+    "ext-openssl": "*",
+    "flarum/core": "^2.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "ErnestDefoe\\Federation\\": "src/"
+    }
+  },
+  "extra": {
+    "flarum-extension": {
+      "title": "Federation (ActivityPub)",
+      "category": "feature",
+      "icon": {
+        "name": "fas fa-globe",
+        "backgroundColor": "#5b3df5",
+        "color": "#fff"
+      }
+    },
+    "flarum-cli": {
+      "modules": {
+        "js": true,
+        "css": false,
+        "locale": true
+      }
+    }
+  },
+  "minimum-stability": "beta",
+  "prefer-stable": true
+}
