@@ -1,0 +1,12 @@
+name: Federation PHP
+
+on: [workflow_dispatch, push, pull_request]
+
+jobs:
+  run:
+    uses: flarum/framework/.github/workflows/REUSABLE_backend.yml@2.x
+    with:
+      enable_backend_testing: false
+      backend_directory: .
+
+      php_versions: '["8.3", "8.4"]'
