@@ -1,0 +1,154 @@
+<?php
+
+namespace ErnestDefoe\Federation\Service;
+
+use ErnestDefoe\Federation\Federation;
+use Flarum\User\User;
+use GuzzleHttp\Client;
+use Illuminate\Contracts\Cache\Repository as Cache;
+use Psr\Log\LoggerInterface;
+
+/**
+ * Outbound HTTP: fetches (and caches) remote actor documents and delivers signed
+ * activities to remote inboxes. Every destination is screened by {@see UrlGuard},
+ * and the connection is pinned to the validated IP (via curl's resolve override)
+ * so a zero-TTL DNS record can't be flipped to an internal address between the
+ * check and the connect (SSRF / DNS rebinding).
+ */
+class ActorFetcher
+{
+    /** Largest actor document accepted; real ones are a few KB. */
+    private const MAX_DOCUMENT = 1048576; // 1 MB
+
+    public function __construct(
+        protected HttpSigner $signer,
+        protected UrlGuard $guard,
+        protected Cache $cache,
+        protected LoggerInterface $log,
+        protected Client $http,
+    ) {}
+
+    /** Fetch (and cache) a remote actor document. Accepts an actor or key URL. */
+    public function fetchActor(string $url): ?array
+    {
+        $url = strtok($url, '#') ?: $url; // strip #main-key fragment
+
+        $pin = $this->guard->pinnedIp($url);
+        if ($pin === null) {
+            $this->log->debug('[federation] refused to fetch unsafe actor URL: '.$url);
+
+            return null;
+        }
+
+        $key = 'federation:actor:'.sha1($url);
+        $cached = $this->cache->get($key);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $data = null;
+        try {
+            $headers = $this->signer->signHeaders(null, 'get', $url);
+            $headers['Accept'] = Federation::CTYPE;
+            $res = $this->http->get($url, [
+                'timeout' => 8,
+                'headers' => $headers,
+                'http_errors' => false,
+                // The guard checked THIS host only; a redirect could point anywhere
+                // (loopback, metadata), so redirects are never followed.
+                'allow_redirects' => false,
+                'stream' => true, // read at most MAX_DOCUMENT bytes, below
+            ] + $this->pinOption($url, $pin));
+            if ($res->getStatusCode() >= 200 && $res->getStatusCode() < 300) {
+                $raw = $this->readCapped($res->getBody());
+                $decoded = $raw === null ? null : json_decode($raw, true);
+                $data = is_array($decoded) ? $decoded : null;
+            }
+            $res->getBody()->close();
+        } catch (\Throwable $e) {
+            $this->log->debug('[federation] fetchActor failed: '.$e->getMessage());
+        }
+
+        // Cache successes only — a transient failure (restart, rate-limit) must
+        // not poison the key for an hour and make a live actor look "gone".
+        if ($data !== null) {
+            $this->cache->put($key, $data, 3600);
+        }
+
+        return $data;
+    }
+
+    /** POST a signed activity to a single inbox. Returns the HTTP status, or 0. */
+    public function deliver(?User $signer, string $inbox, array $activity): int
+    {
+        $pin = $this->guard->pinnedIp($inbox);
+        if ($pin === null) {
+            $this->log->debug('[federation] refused to deliver to unsafe inbox: '.$inbox);
+
+            return 0;
+        }
+
+        try {
+            $body = json_encode($activity, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $headers = $this->signer->signHeaders($signer, 'post', $inbox, $body);
+            $res = $this->http->post($inbox, [
+                'timeout' => 12,
+                'headers' => $headers,
+                'body' => $body,
+                'http_errors' => false,
+                'allow_redirects' => false, // see fetchActor()
+                'stream' => true, // the reply body is never read, so never buffered
+            ] + $this->pinOption($inbox, $pin));
+            $status = $res->getStatusCode();
+            $res->getBody()->close();
+
+            return $status;
+        } catch (\Throwable $e) {
+            $this->log->debug('[federation] delivery failed to '.$inbox.': '.$e->getMessage());
+
+            return 0;
+        }
+    }
+
+    /**
+     * The body, or null when it is larger than MAX_DOCUMENT. Read in pieces from
+     * the stream so a hostile server cannot push hundreds of MB into a worker.
+     */
+    private function readCapped(\Psr\Http\Message\StreamInterface $body): ?string
+    {
+        $buf = '';
+        while (! $body->eof()) {
+            $chunk = $body->read(65536);
+            if ($chunk === '') {
+                break;
+            }
+            $buf .= $chunk;
+            if (strlen($buf) > self::MAX_DOCUMENT) {
+                return null;
+            }
+        }
+
+        return $buf;
+    }
+
+    /**
+     * curl request option pinning $url's host to the pre-validated IP. Empty when
+     * pinning is disabled (dev override) or curl isn't available — the UrlGuard
+     * check still ran, so only the (rare) curl-less rebinding edge is uncovered.
+     */
+    private function pinOption(string $url, string $pin): array
+    {
+        if ($pin === '' || ! defined('CURLOPT_RESOLVE')) {
+            return [];
+        }
+        $parts = parse_url($url);
+        $host = trim((string) ($parts['host'] ?? ''), '[]');
+        $port = $parts['port'] ?? 443;
+
+        if (str_contains($pin, ':')) {
+            $pin = '['.$pin.']'; // curl wants an IPv6 address bracketed
+        }
+
+        return ['curl' => [CURLOPT_RESOLVE => ["$host:$port:$pin"]]];
+    }
+}

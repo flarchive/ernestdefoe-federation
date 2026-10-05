@@ -1,0 +1,30 @@
+name: Federation JS
+
+on: [workflow_dispatch, push, pull_request]
+
+# 🚨 Flarum's reusable frontend workflow COMMITS the rebuilt bundle back to the
+# repository, and a reusable workflow inherits the CALLER's permissions. Without
+# this the build succeeds, the commit is staged, and the push is refused:
+#
+#   remote: Permission to ernestdefoe/federation.git denied to github-actions[bot]
+#   fatal: ... The requested URL returned error: 403
+#
+# Which surfaces as a red run and an email on every push, while looking like a
+# build failure rather than a permission one. What actually differed here was
+# only the source maps — they embed build paths, so the runner's never match a
+# bundle built on a laptop.
+permissions:
+  contents: write
+
+jobs:
+  run:
+    uses: flarum/framework/.github/workflows/REUSABLE_frontend.yml@2.x
+    with:
+      enable_bundlewatch: false
+      enable_prettier: false
+      enable_typescript: false
+
+      frontend_directory: ./js
+      backend_directory: .
+      js_package_manager: npm
+      main_git_branch: main
