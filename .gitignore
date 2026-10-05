@@ -1,0 +1,7 @@
+node_modules
+vendor
+composer.lock
+js/dist/*.js.map
+.DS_Store
+.idea
+.vscode
